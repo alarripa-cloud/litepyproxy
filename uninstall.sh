@@ -4,6 +4,7 @@ set -eu
 SERVICE_USER="liteproxy"
 INSTALL_DIR="/opt/litepyproxy"
 SERVICE_FILE="/etc/systemd/system/litepyproxy.service"
+CONFIG_FILE="/etc/litepyproxy.conf"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run this uninstaller with sudo."
@@ -14,6 +15,7 @@ echo "=== Uninstalling LitePyProxy ==="
 
 systemctl disable --now litepyproxy 2>/dev/null || true
 rm -f "$SERVICE_FILE"
+rm -f "$CONFIG_FILE"
 systemctl daemon-reload
 
 rm -rf "$INSTALL_DIR"
