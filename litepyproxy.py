@@ -9,7 +9,11 @@ import httpx
 
 HOST = os.getenv("LITEPYPROXY_HOST", "127.0.0.1")
 PORT = int(os.getenv("LITEPYPROXY_PORT", "8880"))
+BASE_PATH = os.getenv("LITEPYPROXY_BASE_PATH", "").strip()
 TIMEOUT = 30.0
+
+if BASE_PATH:
+    BASE_PATH = "/" + BASE_PATH.strip("/")
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
@@ -29,6 +33,8 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         if error:
             error_html = f"<p><strong>Error:</strong> {html.escape(error)}</p>"
 
+        proxy_action = f"{BASE_PATH}/proxy"
+
         body = f"""<!doctype html>
 <html>
 <head>
@@ -37,7 +43,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 </head>
 <body>
     <h1>LitePyProxy</h1>
-    <form action="/proxy" method="get">
+    <form action="{html.escape(proxy_action, quote=True)}" method="get">
         <label for="url">URL:</label>
         <input id="url" name="url" type="url" size="70"
                placeholder="https://example.com" required>
@@ -93,6 +99,8 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     server = ThreadingHTTPServer((HOST, PORT), LitePyProxyHandler)
     print(f"LitePyProxy listening on http://{HOST}:{PORT}", flush=True)
+    if BASE_PATH:
+        print(f"Public base path: {BASE_PATH}/", flush=True)
 
     try:
         server.serve_forever()
