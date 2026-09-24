@@ -2,8 +2,9 @@
 
 import html
 import os
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import httpx
 
@@ -14,6 +15,84 @@ TIMEOUT = 30.0
 
 if BASE_PATH:
     BASE_PATH = "/" + BASE_PATH.strip("/")
+
+PROXY_ENDPOINT = f"{BASE_PATH}/proxy"
+REWRITE_ATTRS = {"href", "src", "action"}
+SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:")
+
+
+def proxy_url(current_url, value):
+    value = value.strip()
+    if (
+        not value
+        or value.startswith("#")
+        or value.lower().startswith(SKIP_SCHEMES)
+    ):
+        return value
+
+    absolute = urljoin(current_url, value)
+    parsed = urlparse(absolute)
+    if parsed.scheme not in ("http", "https"):
+        return value
+
+    return f"{PROXY_ENDPOINT}?url={quote(absolute, safe='')}"
+
+
+class HTMLRewriter(HTMLParser):
+    def __init__(self, current_url):
+        super().__init__(convert_charrefs=False)
+        self.current_url = current_url
+        self.parts = []
+
+    def rewrite_attrs(self, attrs):
+        rewritten = []
+        for name, value in attrs:
+            if value is not None and name.lower() in REWRITE_ATTRS:
+                value = proxy_url(self.current_url, value)
+            rewritten.append((name, value))
+        return rewritten
+
+    def attrs_text(self, attrs):
+        parts = []
+        for name, value in attrs:
+            if value is None:
+                parts.append(name)
+            else:
+                parts.append(f'{name}="{html.escape(value, quote=True)}"')
+        return (" " + " ".join(parts)) if parts else ""
+
+    def handle_starttag(self, tag, attrs):
+        self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(attrs))}>")
+
+    def handle_startendtag(self, tag, attrs):
+        self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(attrs))} />")
+
+    def handle_endtag(self, tag):
+        self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+    def handle_entityref(self, name):
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.parts.append(f"&#{name};")
+
+    def handle_comment(self, data):
+        self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl):
+        self.parts.append(f"<!{decl}>")
+
+    def handle_pi(self, data):
+        self.parts.append(f"<?{data}>")
+
+    def unknown_decl(self, data):
+        self.parts.append(f"<![{data}]>")
+
+    def output(self):
+        return "".join(self.parts)
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
@@ -33,8 +112,6 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         if error:
             error_html = f"<p><strong>Error:</strong> {html.escape(error)}</p>"
 
-        proxy_action = f"{BASE_PATH}/proxy"
-
         body = f"""<!doctype html>
 <html>
 <head>
@@ -43,7 +120,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 </head>
 <body>
     <h1>LitePyProxy</h1>
-    <form action="{html.escape(proxy_action, quote=True)}" method="get">
+    <form action="{html.escape(PROXY_ENDPOINT, quote=True)}" method="get">
         <label for="url">URL:</label>
         <input id="url" name="url" type="url" size="70"
                placeholder="https://example.com" required>
@@ -81,10 +158,18 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             self.send_error(502, f"Upstream request failed: {exc}")
             return
 
-        body = response.content
         content_type = response.headers.get(
             "content-type", "application/octet-stream"
         )
+
+        if "text/html" in content_type.lower():
+            rewriter = HTMLRewriter(str(response.url))
+            rewriter.feed(response.text)
+            rewriter.close()
+            body = rewriter.output().encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        else:
+            body = response.content
 
         self.send_response(response.status_code)
         self.send_header("Content-Type", content_type)
