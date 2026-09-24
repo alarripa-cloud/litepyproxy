@@ -10,7 +10,7 @@ Group=liteproxy
 WorkingDirectory=/opt/litepyproxy
 Environment=LITEPYPROXY_HOST=127.0.0.1
 Environment=LITEPYPROXY_PORT=8880
-Environment=LITEPYPROXY_BASE_PATH=/py_proxy
+EnvironmentFile=-/etc/litepyproxy.conf
 ExecStart=/opt/litepyproxy/venv/bin/python /opt/litepyproxy/litepyproxy.py
 Restart=on-failure
 RestartSec=3
