@@ -2,6 +2,7 @@
 
 import html
 import os
+import threading
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urljoin, urlparse
@@ -12,6 +13,7 @@ HOST = os.getenv("LITEPYPROXY_HOST", "127.0.0.1")
 PORT = int(os.getenv("LITEPYPROXY_PORT", "8880"))
 BASE_PATH = os.getenv("LITEPYPROXY_BASE_PATH", "").strip()
 TIMEOUT = 30.0
+MAX_CONNECTIONS = int(os.getenv("LITEPYPROXY_MAX_CONNECTIONS", "6"))
 
 if BASE_PATH:
     BASE_PATH = "/" + BASE_PATH.strip("/")
@@ -19,6 +21,17 @@ if BASE_PATH:
 PROXY_ENDPOINT = f"{BASE_PATH}/proxy"
 REWRITE_ATTRS = {"href", "src", "action"}
 SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:")
+
+UPSTREAM_SLOTS = threading.BoundedSemaphore(MAX_CONNECTIONS)
+HTTP_CLIENT = httpx.Client(
+    follow_redirects=True,
+    timeout=TIMEOUT,
+    headers={"User-Agent": "LitePyProxy/0.1"},
+    limits=httpx.Limits(
+        max_connections=MAX_CONNECTIONS,
+        max_keepalive_connections=MAX_CONNECTIONS,
+    ),
+)
 
 
 def proxy_url(current_url, value):
@@ -148,12 +161,8 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            with httpx.Client(
-                follow_redirects=True,
-                timeout=TIMEOUT,
-                headers={"User-Agent": "LitePyProxy/0.1"},
-            ) as client:
-                response = client.get(target)
+            with UPSTREAM_SLOTS:
+                response = HTTP_CLIENT.get(target)
         except httpx.HTTPError as exc:
             self.send_error(502, f"Upstream request failed: {exc}")
             return
@@ -184,6 +193,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     server = ThreadingHTTPServer((HOST, PORT), LitePyProxyHandler)
     print(f"LitePyProxy listening on http://{HOST}:{PORT}", flush=True)
+    print(f"Maximum upstream connections: {MAX_CONNECTIONS}", flush=True)
     if BASE_PATH:
         print(f"Public base path: {BASE_PATH}/", flush=True)
 
@@ -193,3 +203,4 @@ if __name__ == "__main__":
         pass
     finally:
         server.server_close()
+        HTTP_CLIENT.close()
