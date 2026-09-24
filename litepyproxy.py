@@ -184,7 +184,10 @@ def lpp_runtime_script(current_url):
             if (absolute.protocol !== "http:" && absolute.protocol !== "https:") {{
                 return value;
             }}
-            return LPP_PROXY_ENDPOINT + "?url=" + encodeURIComponent(absolute.href);
+            const logicalOrigin = new URL(LPP_BASE_URL).origin;
+            return LPP_PROXY_ENDPOINT
+                + "?url=" + encodeURIComponent(absolute.href)
+                + "&lpp_origin=" + encodeURIComponent(logicalOrigin);
         }} catch (_) {{
             return value;
         }}
@@ -217,12 +220,26 @@ def lpp_runtime_script(current_url):
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
-    def get_upstream_headers(self):
+    def get_upstream_headers(self, logical_origin=None):
         headers = {}
         for name in FORWARDED_HEADERS:
             value = self.headers.get(name)
             if value:
                 headers[name] = value
+        if logical_origin:
+            parsed_origin = urlparse(logical_origin)
+            if (
+                parsed_origin.scheme in ("http", "https")
+                and parsed_origin.netloc
+                and parsed_origin.path in ("", "/")
+                and not parsed_origin.params
+                and not parsed_origin.query
+                and not parsed_origin.fragment
+            ):
+                headers["Origin"] = (
+                    f"{parsed_origin.scheme}://{parsed_origin.netloc}"
+                )
+
         return headers
 
     def get_proxy_session(self):
@@ -245,11 +262,14 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         pairs = parse_qsl(request.query, keep_blank_values=True)
         target = ""
+        logical_origin = None
         form_pairs = []
 
         for name, value in pairs:
             if name == "url" and not target:
                 target = value.strip()
+            elif name == "lpp_origin" and logical_origin is None:
+                logical_origin = value.strip()
             else:
                 form_pairs.append((name, value))
 
@@ -257,18 +277,19 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             separator = "&" if urlparse(target).query else "?"
             target += separator + urlencode(form_pairs, doseq=True)
 
-        return target
+        return target, logical_origin
 
     def do_GET(self):
-        target = self.get_target(include_form_query=True)
-        if target is not None:
-            self.proxy(target, head_only=False)
+        result = self.get_target(include_form_query=True)
+        if result[0] is not None:
+            target, logical_origin = result
+            self.proxy(target, head_only=False, logical_origin=logical_origin)
             return
 
         self.home()
 
     def do_POST(self):
-        target = self.get_target()
+        target, logical_origin = self.get_target()
         if target is None:
             self.send_error(404)
             return
@@ -286,12 +307,13 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             method="POST",
             request_body=body,
             request_content_type=self.headers.get("Content-Type"),
+            logical_origin=logical_origin,
         )
 
     def do_HEAD(self):
-        target = self.get_target()
+        target, logical_origin = self.get_target()
         if target is not None:
-            self.proxy(target, head_only=True)
+            self.proxy(target, head_only=True, logical_origin=logical_origin)
             return
 
         self.home(head_only=True)
@@ -334,6 +356,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         method="GET",
         request_body=None,
         request_content_type=None,
+        logical_origin=None,
     ):
         if not target:
             self.home("No URL supplied.", head_only=head_only)
@@ -349,7 +372,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         session_id, session, new_session = self.get_proxy_session()
         client = session["client"]
-        upstream_headers = self.get_upstream_headers()
+        upstream_headers = self.get_upstream_headers(logical_origin)
         if request_content_type:
             upstream_headers["Content-Type"] = request_content_type
 
