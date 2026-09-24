@@ -249,10 +249,66 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             body = b""
             content_length = response.headers.get("content-length")
         elif "text/html" in content_type.lower():
-            rewriter = HTMLRewriter(str(response.url))
+            current_url = str(response.url)
+            rewriter = HTMLRewriter(current_url)
             rewriter.feed(response.text)
             rewriter.close()
-            body = rewriter.output().encode("utf-8")
+            page = rewriter.output()
+
+            toolbar = f"""<style>
+#litepyproxy-bar {{
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2147483647;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    background: #eee;
+    border-bottom: 1px solid #999;
+    color: #111;
+    font: 14px sans-serif;
+}}
+#litepyproxy-bar form {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+}}
+#litepyproxy-bar input {{
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    font: 14px sans-serif;
+}}
+#litepyproxy-bar button {{
+    padding: 4px 10px;
+}}
+html {{
+    padding-top: 42px !important;
+}}
+</style>
+<div id="litepyproxy-bar">
+    <form action="{html.escape(PROXY_ENDPOINT, quote=True)}" method="get">
+        <strong>LitePyProxy</strong>
+        <input name="url" type="url"
+               value="{html.escape(current_url, quote=True)}" required>
+        <button type="submit">GO</button>
+    </form>
+</div>"""
+
+            lower_page = page.lower()
+            body_pos = lower_page.find("<body")
+            if body_pos != -1:
+                body_end = page.find(">", body_pos)
+                if body_end != -1:
+                    page = page[:body_end + 1] + toolbar + page[body_end + 1:]
+                else:
+                    page = toolbar + page
+            else:
+                page = toolbar + page
+
+            body = page.encode("utf-8")
             content_type = "text/html; charset=utf-8"
             content_length = str(len(body))
         else:
