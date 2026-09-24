@@ -1,0 +1,23 @@
+[Unit]
+Description=LitePyProxy Web Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=liteproxy
+Group=liteproxy
+WorkingDirectory=/opt/litepyproxy
+Environment=LITEPYPROXY_HOST=127.0.0.1
+Environment=LITEPYPROXY_PORT=8880
+ExecStart=/opt/litepyproxy/venv/bin/python /opt/litepyproxy/litepyproxy.py
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
