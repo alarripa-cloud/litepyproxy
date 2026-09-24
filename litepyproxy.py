@@ -2,8 +2,11 @@
 
 import html
 import os
+import secrets
 import threading
+import time
 from html.parser import HTMLParser
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
@@ -23,15 +26,41 @@ REWRITE_ATTRS = {"href", "src", "action"}
 SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:")
 
 UPSTREAM_SLOTS = threading.BoundedSemaphore(MAX_CONNECTIONS)
-HTTP_CLIENT = httpx.Client(
-    follow_redirects=True,
-    timeout=TIMEOUT,
-    headers={"User-Agent": "LitePyProxy/0.1"},
-    limits=httpx.Limits(
-        max_connections=MAX_CONNECTIONS,
-        max_keepalive_connections=MAX_CONNECTIONS,
-    ),
-)
+
+SESSION_COOKIE = "litepyproxy_session"
+SESSION_MAX_AGE = 60 * 60 * 8
+SESSIONS = {}
+SESSIONS_LOCK = threading.Lock()
+
+
+def new_http_client():
+    return httpx.Client(
+        follow_redirects=True,
+        timeout=TIMEOUT,
+        headers={"User-Agent": "LitePyProxy/0.1"},
+        limits=httpx.Limits(
+            max_connections=MAX_CONNECTIONS,
+            max_keepalive_connections=MAX_CONNECTIONS,
+        ),
+    )
+
+
+def get_session(session_id=None):
+    now = time.time()
+
+    with SESSIONS_LOCK:
+        if session_id and session_id in SESSIONS:
+            session = SESSIONS[session_id]
+            session["last_used"] = now
+            return session_id, session, False
+
+        session_id = secrets.token_urlsafe(24)
+        session = {
+            "client": new_http_client(),
+            "last_used": now,
+        }
+        SESSIONS[session_id] = session
+        return session_id, session, True
 
 
 def proxy_url(current_url, value):
@@ -109,6 +138,19 @@ class HTMLRewriter(HTMLParser):
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
+    def get_proxy_session(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            pass
+
+        session_id = None
+        if SESSION_COOKIE in cookie:
+            session_id = cookie[SESSION_COOKIE].value
+
+        return get_session(session_id)
+
     def do_GET(self):
         request = urlparse(self.path)
 
@@ -160,9 +202,12 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             self.home("Only complete http:// or https:// URLs are supported.")
             return
 
+        session_id, session, new_session = self.get_proxy_session()
+        client = session["client"]
+
         try:
             with UPSTREAM_SLOTS:
-                response = HTTP_CLIENT.get(target)
+                response = client.get(target)
         except httpx.HTTPError as exc:
             self.send_error(502, f"Upstream request failed: {exc}")
             return
@@ -183,6 +228,13 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         self.send_response(response.status_code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if new_session:
+            cookie_path = BASE_PATH or "/"
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE}={session_id}; Path={cookie_path}; "
+                f"Max-Age={SESSION_MAX_AGE}; HttpOnly; SameSite=Lax",
+            )
         self.end_headers()
         self.wfile.write(body)
 
@@ -203,4 +255,6 @@ if __name__ == "__main__":
         pass
     finally:
         server.server_close()
-        HTTP_CLIENT.close()
+        with SESSIONS_LOCK:
+            for session in SESSIONS.values():
+                session["client"].close()
