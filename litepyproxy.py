@@ -2,6 +2,7 @@
 
 import html
 import os
+import re
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urljoin, urlparse
@@ -19,6 +20,7 @@ if BASE_PATH:
 PROXY_ENDPOINT = f"{BASE_PATH}/proxy"
 REWRITE_ATTRS = {"href", "src", "action"}
 SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:")
+CSS_URL_RE = re.compile(r"url\\(\\s*([\'\\\"]?)(.*?)\\1\\s*\\)", re.IGNORECASE)
 
 
 def proxy_url(current_url, value):
@@ -168,6 +170,9 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             rewriter.close()
             body = rewriter.output().encode("utf-8")
             content_type = "text/html; charset=utf-8"
+        elif "text/css" in content_type.lower():
+            body = rewrite_css(response.text, str(response.url)).encode("utf-8")
+            content_type = "text/css; charset=utf-8"
         else:
             body = response.content
 
