@@ -28,3 +28,7 @@ remote website
 The service will run under its own unprivileged system user and be managed by systemd.
 
 Early project — first target is a minimal working proxy with a URL bar, GET requests, link rewriting, and static asset passthrough.
+
+## Historical note
+
+> *“Certbot independently rediscovered the Tonyex deployment model.”*
