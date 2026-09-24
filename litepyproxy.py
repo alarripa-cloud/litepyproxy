@@ -24,6 +24,7 @@ if BASE_PATH:
 PROXY_ENDPOINT = f"{BASE_PATH}/proxy"
 REWRITE_ATTRS = {"href", "src", "action"}
 SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:")
+FORWARDED_HEADERS = ("User-Agent", "Accept", "Accept-Language")
 
 UPSTREAM_SLOTS = threading.BoundedSemaphore(MAX_CONNECTIONS)
 
@@ -37,7 +38,6 @@ def new_http_client():
     return httpx.Client(
         follow_redirects=True,
         timeout=TIMEOUT,
-        headers={"User-Agent": "LitePyProxy/0.1"},
         limits=httpx.Limits(
             max_connections=MAX_CONNECTIONS,
             max_keepalive_connections=MAX_CONNECTIONS,
@@ -138,6 +138,14 @@ class HTMLRewriter(HTMLParser):
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
+    def get_upstream_headers(self):
+        headers = {}
+        for name in FORWARDED_HEADERS:
+            value = self.headers.get(name)
+            if value:
+                headers[name] = value
+        return headers
+
     def get_proxy_session(self):
         cookie = SimpleCookie()
         try:
@@ -204,10 +212,11 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         session_id, session, new_session = self.get_proxy_session()
         client = session["client"]
+        upstream_headers = self.get_upstream_headers()
 
         try:
             with UPSTREAM_SLOTS:
-                response = client.get(target)
+                response = client.get(target, headers=upstream_headers)
         except httpx.HTTPError as exc:
             self.send_error(502, f"Upstream request failed: {exc}")
             return
