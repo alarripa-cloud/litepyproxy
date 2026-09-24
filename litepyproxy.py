@@ -8,7 +8,7 @@ import time
 from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urljoin, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urljoin, urlparse
 
 import httpx
 
@@ -104,6 +104,27 @@ class HTMLRewriter(HTMLParser):
         return (" " + " ".join(parts)) if parts else ""
 
     def handle_starttag(self, tag, attrs):
+        if tag.lower() == "form":
+            attr_map = {name.lower(): value for name, value in attrs}
+            action = attr_map.get("action") or self.current_url
+            absolute_action = urljoin(self.current_url, action)
+
+            rewritten = []
+            for name, value in attrs:
+                if name.lower() == "action":
+                    value = PROXY_ENDPOINT
+                rewritten.append((name, value))
+
+            if "action" not in attr_map:
+                rewritten.append(("action", PROXY_ENDPOINT))
+
+            self.parts.append(f"<{tag}{self.attrs_text(rewritten)}>")
+            self.parts.append(
+                f'<input type="hidden" name="url" '
+                f'value="{html.escape(absolute_action, quote=True)}">'
+            )
+            return
+
         self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(attrs))}>")
 
     def handle_startendtag(self, tag, attrs):
@@ -159,21 +180,55 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         return get_session(session_id)
 
-    def get_target(self):
+    def get_target(self, include_form_query=False):
         request = urlparse(self.path)
         if request.path != "/proxy":
             return None
 
-        params = parse_qs(request.query)
-        return params.get("url", [""])[0].strip()
+        pairs = parse_qsl(request.query, keep_blank_values=True)
+        target = ""
+        form_pairs = []
+
+        for name, value in pairs:
+            if name == "url" and not target:
+                target = value.strip()
+            else:
+                form_pairs.append((name, value))
+
+        if include_form_query and target and form_pairs:
+            separator = "&" if urlparse(target).query else "?"
+            target += separator + urlencode(form_pairs, doseq=True)
+
+        return target
 
     def do_GET(self):
-        target = self.get_target()
+        target = self.get_target(include_form_query=True)
         if target is not None:
             self.proxy(target, head_only=False)
             return
 
         self.home()
+
+    def do_POST(self):
+        target = self.get_target()
+        if target is None:
+            self.send_error(404)
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_error(400, "Invalid Content-Length")
+            return
+
+        body = self.rfile.read(content_length)
+        self.proxy(
+            target,
+            head_only=False,
+            method="POST",
+            request_body=body,
+            request_content_type=self.headers.get("Content-Type"),
+        )
 
     def do_HEAD(self):
         target = self.get_target()
@@ -214,7 +269,14 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         if not head_only:
             self.wfile.write(body)
 
-    def proxy(self, target, head_only=False):
+    def proxy(
+        self,
+        target,
+        head_only=False,
+        method="GET",
+        request_body=None,
+        request_content_type=None,
+    ):
         if not target:
             self.home("No URL supplied.", head_only=head_only)
             return
@@ -230,11 +292,19 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         session_id, session, new_session = self.get_proxy_session()
         client = session["client"]
         upstream_headers = self.get_upstream_headers()
+        if request_content_type:
+            upstream_headers["Content-Type"] = request_content_type
 
         try:
             with UPSTREAM_SLOTS:
                 if head_only:
                     response = client.head(target, headers=upstream_headers)
+                elif method == "POST":
+                    response = client.post(
+                        target,
+                        content=request_body or b"",
+                        headers=upstream_headers,
+                    )
                 else:
                     response = client.get(target, headers=upstream_headers)
         except httpx.HTTPError as exc:
