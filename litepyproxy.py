@@ -63,7 +63,7 @@ def get_session(session_id=None):
         return session_id, session, True
 
 
-def proxy_url(current_url, value):
+def lpp_proxify_url(value, base_url):
     value = value.strip()
     if (
         not value
@@ -72,7 +72,7 @@ def proxy_url(current_url, value):
     ):
         return value
 
-    absolute = urljoin(current_url, value)
+    absolute = urljoin(base_url, value)
     parsed = urlparse(absolute)
     if parsed.scheme not in ("http", "https"):
         return value
@@ -90,7 +90,7 @@ class HTMLRewriter(HTMLParser):
         rewritten = []
         for name, value in attrs:
             if value is not None and name.lower() in REWRITE_ATTRS:
-                value = proxy_url(self.current_url, value)
+                value = lpp_proxify_url(value, self.current_url)
             rewritten.append((name, value))
         return rewritten
 
