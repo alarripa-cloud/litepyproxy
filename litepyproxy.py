@@ -158,6 +158,63 @@ class HTMLRewriter(HTMLParser):
         return "".join(self.parts)
 
 
+def lpp_runtime_script(current_url):
+    return f"""<script>
+(function() {{
+    "use strict";
+
+    const LPP_PROXY_ENDPOINT = {JSON.stringify(PROXY_ENDPOINT)};
+    const LPP_BASE_URL = {JSON.stringify(current_url)};
+
+    function lppProxifyUrl(value) {{
+        if (typeof value !== "string") return value;
+
+        const trimmed = value.trim();
+        if (
+            !trimmed ||
+            trimmed.startsWith("#") ||
+            /^(?:data|javascript|mailto|tel):/i.test(trimmed)
+        ) {{
+            return value;
+        }}
+
+        try {{
+            const absolute = new URL(trimmed, LPP_BASE_URL);
+            if (absolute.protocol !== "http:" && absolute.protocol !== "https:") {{
+                return value;
+            }}
+            return LPP_PROXY_ENDPOINT + "?url=" + encodeURIComponent(absolute.href);
+        }} catch (_) {{
+            return value;
+        }}
+    }}
+
+    const nativeFetch = window.fetch;
+    if (nativeFetch) {{
+        window.fetch = function(input, init) {{
+            if (typeof input === "string") {{
+                input = lppProxifyUrl(input);
+            }} else if (input instanceof URL) {{
+                input = lppProxifyUrl(input.href);
+            }}
+            return nativeFetch.call(this, input, init);
+        }};
+    }}
+
+    const nativeXhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {{
+        const args = Array.prototype.slice.call(arguments);
+        if (typeof url === "string") {{
+            args[1] = lppProxifyUrl(url);
+        }} else if (url instanceof URL) {{
+            args[1] = lppProxifyUrl(url.href);
+        }}
+        return nativeXhrOpen.apply(this, args);
+    }};
+}})();
+</script>"""
+
+
 class LitePyProxyHandler(BaseHTTPRequestHandler):
     def get_upstream_headers(self):
         headers = {}
@@ -366,6 +423,22 @@ html {{
         <button type="submit">GO</button>
     </form>
 </div>"""
+
+            runtime_script = lpp_runtime_script(current_url)
+            lower_page = page.lower()
+            head_pos = lower_page.find("<head")
+            if head_pos != -1:
+                head_end = page.find(">", head_pos)
+                if head_end != -1:
+                    page = (
+                        page[:head_end + 1]
+                        + runtime_script
+                        + page[head_end + 1:]
+                    )
+                else:
+                    page = runtime_script + page
+            else:
+                page = runtime_script + page
 
             lower_page = page.lower()
             body_pos = lower_page.find("<body")
