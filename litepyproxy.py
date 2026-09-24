@@ -281,7 +281,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         result = self.get_target(include_form_query=True)
-        if result[0] is not None:
+        if result is not None:
             target, logical_origin = result
             self.proxy(target, head_only=False, logical_origin=logical_origin)
             return
@@ -289,10 +289,12 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         self.home()
 
     def do_POST(self):
-        target, logical_origin = self.get_target()
-        if target is None:
+        result = self.get_target()
+        if result is None:
             self.send_error(404)
             return
+
+        target, logical_origin = result
 
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
@@ -311,8 +313,9 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         )
 
     def do_HEAD(self):
-        target, logical_origin = self.get_target()
-        if target is not None:
+        result = self.get_target()
+        if result is not None:
+            target, logical_origin = result
             self.proxy(target, head_only=True, logical_origin=logical_origin)
             return
 
