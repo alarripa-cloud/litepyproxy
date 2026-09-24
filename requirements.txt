@@ -1,1 +1,1 @@
-# No external Python dependencies yet.
+httpx>=0.27,<1.0
