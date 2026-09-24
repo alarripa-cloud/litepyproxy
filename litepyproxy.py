@@ -159,18 +159,31 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         return get_session(session_id)
 
-    def do_GET(self):
+    def get_target(self):
         request = urlparse(self.path)
+        if request.path != "/proxy":
+            return None
 
-        if request.path == "/proxy":
-            params = parse_qs(request.query)
-            target = params.get("url", [""])[0].strip()
-            self.proxy(target)
+        params = parse_qs(request.query)
+        return params.get("url", [""])[0].strip()
+
+    def do_GET(self):
+        target = self.get_target()
+        if target is not None:
+            self.proxy(target, head_only=False)
             return
 
         self.home()
 
-    def home(self, error=""):
+    def do_HEAD(self):
+        target = self.get_target()
+        if target is not None:
+            self.proxy(target, head_only=True)
+            return
+
+        self.home(head_only=True)
+
+    def home(self, error="", head_only=False):
         error_html = ""
         if error:
             error_html = f"<p><strong>Error:</strong> {html.escape(error)}</p>"
@@ -198,16 +211,20 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if not head_only:
+            self.wfile.write(body)
 
-    def proxy(self, target):
+    def proxy(self, target, head_only=False):
         if not target:
-            self.home("No URL supplied.")
+            self.home("No URL supplied.", head_only=head_only)
             return
 
         parsed = urlparse(target)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            self.home("Only complete http:// or https:// URLs are supported.")
+            self.home(
+                "Only complete http:// or https:// URLs are supported.",
+                head_only=head_only,
+            )
             return
 
         session_id, session, new_session = self.get_proxy_session()
@@ -216,7 +233,10 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         try:
             with UPSTREAM_SLOTS:
-                response = client.get(target, headers=upstream_headers)
+                if head_only:
+                    response = client.head(target, headers=upstream_headers)
+                else:
+                    response = client.get(target, headers=upstream_headers)
         except httpx.HTTPError as exc:
             self.send_error(502, f"Upstream request failed: {exc}")
             return
@@ -225,18 +245,24 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             "content-type", "application/octet-stream"
         )
 
-        if "text/html" in content_type.lower():
+        if head_only:
+            body = b""
+            content_length = response.headers.get("content-length")
+        elif "text/html" in content_type.lower():
             rewriter = HTMLRewriter(str(response.url))
             rewriter.feed(response.text)
             rewriter.close()
             body = rewriter.output().encode("utf-8")
             content_type = "text/html; charset=utf-8"
+            content_length = str(len(body))
         else:
             body = response.content
+            content_length = str(len(body))
 
         self.send_response(response.status_code)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
+        if content_length is not None:
+            self.send_header("Content-Length", content_length)
         if new_session:
             cookie_path = BASE_PATH or "/"
             self.send_header(
@@ -245,7 +271,8 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
                 f"Max-Age={SESSION_MAX_AGE}; HttpOnly; SameSite=Lax",
             )
         self.end_headers()
-        self.wfile.write(body)
+        if not head_only:
+            self.wfile.write(body)
 
     def log_message(self, fmt, *args):
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
