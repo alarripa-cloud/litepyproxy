@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import html
+import json
 import os
 import secrets
 import threading
@@ -163,8 +164,8 @@ def lpp_runtime_script(current_url):
 (function() {{
     "use strict";
 
-    const LPP_PROXY_ENDPOINT = {JSON.stringify(PROXY_ENDPOINT)};
-    const LPP_BASE_URL = {JSON.stringify(current_url)};
+    const LPP_PROXY_ENDPOINT = {json.dumps(PROXY_ENDPOINT)};
+    const LPP_BASE_URL = {json.dumps(current_url)};
 
     function lppProxifyUrl(value) {{
         if (typeof value !== "string") return value;
