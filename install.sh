@@ -5,6 +5,7 @@ APP="litepyproxy"
 SERVICE_USER="liteproxy"
 INSTALL_DIR="/opt/litepyproxy"
 SERVICE_FILE="/etc/systemd/system/litepyproxy.service"
+CONFIG_FILE="/etc/litepyproxy.conf"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run this installer with sudo."
@@ -33,6 +34,18 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
 echo "Installing systemd service"
 install -m 0644 systemd/litepyproxy.service "$SERVICE_FILE"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    printf "Public URL path [/proxy]: "
+    read -r PUBLIC_PATH
+    PUBLIC_PATH=${PUBLIC_PATH:-/proxy}
+    PUBLIC_PATH="/$(printf '%s' "$PUBLIC_PATH" | sed 's#^/*##; s#/*$##')"
+    printf 'LITEPYPROXY_BASE_PATH=%s\n' "$PUBLIC_PATH" > "$CONFIG_FILE"
+    chmod 0644 "$CONFIG_FILE"
+    echo "Configured public path: $PUBLIC_PATH/"
+else
+    echo "Keeping existing configuration: $CONFIG_FILE"
+fi
 
 systemctl daemon-reload
 systemctl enable litepyproxy
