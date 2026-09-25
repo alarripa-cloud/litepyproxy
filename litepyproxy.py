@@ -202,6 +202,20 @@ def lpp_runtime_script(current_url):
         }}
     }}
 
+    const nativeLocationAssign = window.location.assign.bind(window.location);
+    const nativeLocationReplace = window.location.replace.bind(window.location);
+
+    try {{
+        window.location.assign = function(url) {{
+            nativeLocationAssign(lppProxifyUrl(String(url)));
+        }};
+        window.location.replace = function(url) {{
+            nativeLocationReplace(lppProxifyUrl(String(url)));
+        }};
+    }} catch (_) {{
+        // Some browsers expose Location methods as non-writable.
+    }}
+
     const nativeWindowOpen = window.open;
     if (nativeWindowOpen) {{
         window.open = function(url) {{
