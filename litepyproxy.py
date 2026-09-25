@@ -237,7 +237,9 @@ def lpp_runtime_script(current_url):
     const LPP_PROXY_ENDPOINT = {json.dumps(PROXY_ENDPOINT)};
     const LPP_BASE_URL = {json.dumps(current_url)};
 
-    const lppUrl = Object.freeze({{
+    class LPPRuntime {{
+        constructor() {{
+            this.url = Object.freeze({{
         logicalBase: LPP_BASE_URL,
         logicalOrigin: new URL(LPP_BASE_URL).origin,
 
@@ -328,10 +330,23 @@ def lpp_runtime_script(current_url):
                 return logical;
             }}
         }}
-    }});
+            }});
+        }}
+
+        toPhysical(value) {{
+            return this.url.toPhysical(value);
+        }}
+
+        install() {{
+            installRuntime(this);
+        }}
+    }}
+
+    const lppRuntime = new LPPRuntime();
+    const lppUrl = lppRuntime.url;
 
     function lppProxifyUrl(value) {{
-        return lppUrl.toPhysical(value);
+        return lppRuntime.toPhysical(value);
     }}
 
     function lppNavigate(value, replace) {{
@@ -343,133 +358,138 @@ def lpp_runtime_script(current_url):
         }}
     }}
 
-    const nativeLocationAssign = window.location.assign.bind(window.location);
-    const nativeLocationReplace = window.location.replace.bind(window.location);
+    function installRuntime(runtime) {{
+        const nativeLocationAssign = window.location.assign.bind(window.location);
+        const nativeLocationReplace = window.location.replace.bind(window.location);
 
-    try {{
-        window.location.assign = function(url) {{
-            nativeLocationAssign(lppProxifyUrl(String(url)));
-        }};
-        window.location.replace = function(url) {{
-            nativeLocationReplace(lppProxifyUrl(String(url)));
-        }};
-    }} catch (_) {{
-        // Some browsers expose Location methods as non-writable.
-    }}
-
-    function lppExposeLogicalScriptIdentity(script) {{
-        if (!script) return script;
-
-        const src = script.getAttribute("src");
-        if (!src) return script;
-
-        const logicalSrc = lppUrl.toLogical(script.src);
-        if (logicalSrc === script.src) return script;
-
-        return new Proxy(script, {{
-            get: function(target, property, receiver) {{
-                if (property === "src") return logicalSrc;
-                return Reflect.get(target, property, receiver);
-            }}
-        }});
-    }}
-
-    try {{
-        const currentScriptDescriptor = Object.getOwnPropertyDescriptor(
-            Document.prototype,
-            "currentScript"
-        );
-        if (currentScriptDescriptor && currentScriptDescriptor.get) {{
-            Object.defineProperty(document, "currentScript", {{
-                configurable: true,
-                get: function() {{
-                    return lppExposeLogicalScriptIdentity(
-                        currentScriptDescriptor.get.call(document)
-                    );
-                }}
-            }});
-        }}
-    }} catch (_) {{
-        // Keep native currentScript semantics if the browser forbids wrapping it.
-    }}
-
-    function lppInstallUrlProperty(proto, property) {{
         try {{
-            const descriptor = Object.getOwnPropertyDescriptor(proto, property);
-            if (!descriptor || !descriptor.set || !descriptor.get) return;
+            window.location.assign = function(url) {{
+                nativeLocationAssign(lppProxifyUrl(String(url)));
+            }};
+            window.location.replace = function(url) {{
+                nativeLocationReplace(lppProxifyUrl(String(url)));
+            }};
+        }} catch (_) {{
+            // Some browsers expose Location methods as non-writable.
+        }}
 
-            Object.defineProperty(proto, property, {{
-                configurable: descriptor.configurable,
-                enumerable: descriptor.enumerable,
-                get: descriptor.get,
-                set: function(value) {{
-                    if (typeof value === "string") {{
-                        value = lppProxifyUrl(value);
-                    }} else if (value instanceof URL) {{
-                        value = lppProxifyUrl(value.href);
-                    }}
-                    return descriptor.set.call(this, value);
+        function lppExposeLogicalScriptIdentity(script) {{
+            if (!script) return script;
+
+            const src = script.getAttribute("src");
+            if (!src) return script;
+
+            const logicalSrc = lppUrl.toLogical(script.src);
+            if (logicalSrc === script.src) return script;
+
+            return new Proxy(script, {{
+                get: function(target, property, receiver) {{
+                    if (property === "src") return logicalSrc;
+                    return Reflect.get(target, property, receiver);
                 }}
             }});
+        }}
+
+        try {{
+            const currentScriptDescriptor = Object.getOwnPropertyDescriptor(
+                Document.prototype,
+                "currentScript"
+            );
+            if (currentScriptDescriptor && currentScriptDescriptor.get) {{
+                Object.defineProperty(document, "currentScript", {{
+                    configurable: true,
+                    get: function() {{
+                        return lppExposeLogicalScriptIdentity(
+                            currentScriptDescriptor.get.call(document)
+                        );
+                    }}
+                }});
+            }}
         }} catch (_) {{
-            // Keep native DOM behavior when a URL property cannot be wrapped.
+            // Keep native currentScript semantics if the browser forbids wrapping it.
         }}
-    }}
 
-    [
-        [HTMLIFrameElement.prototype, "src"],
-        [HTMLScriptElement.prototype, "src"],
-        [HTMLImageElement.prototype, "src"],
-        [HTMLLinkElement.prototype, "href"]
-    ].forEach(function(entry) {{
-        lppInstallUrlProperty(entry[0], entry[1]);
-    }});
+        function lppInstallUrlProperty(proto, property) {{
+            try {{
+                const descriptor = Object.getOwnPropertyDescriptor(proto, property);
+                if (!descriptor || !descriptor.set || !descriptor.get) return;
 
-    const nativeSetAttribute = Element.prototype.setAttribute;
-    Element.prototype.setAttribute = function(name, value) {{
-        if (
-            typeof name === "string" &&
-            /^(?:src|href)$/i.test(name) &&
-            (typeof value === "string" || value instanceof URL)
-        ) {{
-            value = lppProxifyUrl(String(value));
+                Object.defineProperty(proto, property, {{
+                    configurable: descriptor.configurable,
+                    enumerable: descriptor.enumerable,
+                    get: descriptor.get,
+                    set: function(value) {{
+                        if (typeof value === "string") {{
+                            value = lppProxifyUrl(value);
+                        }} else if (value instanceof URL) {{
+                            value = lppProxifyUrl(value.href);
+                        }}
+                        return descriptor.set.call(this, value);
+                    }}
+                }});
+            }} catch (_) {{
+                // Keep native DOM behavior when a URL property cannot be wrapped.
+            }}
         }}
-        return nativeSetAttribute.call(this, name, value);
-    }};
 
-    const nativeWindowOpen = window.open;
-    if (nativeWindowOpen) {{
-        window.open = function(url) {{
+        [
+            [HTMLIFrameElement.prototype, "src"],
+            [HTMLScriptElement.prototype, "src"],
+            [HTMLImageElement.prototype, "src"],
+            [HTMLLinkElement.prototype, "href"]
+        ].forEach(function(entry) {{
+            lppInstallUrlProperty(entry[0], entry[1]);
+        }});
+
+        const nativeSetAttribute = Element.prototype.setAttribute;
+        Element.prototype.setAttribute = function(name, value) {{
+            if (
+                typeof name === "string" &&
+                /^(?:src|href)$/i.test(name) &&
+                (typeof value === "string" || value instanceof URL)
+            ) {{
+                value = lppProxifyUrl(String(value));
+            }}
+            return nativeSetAttribute.call(this, name, value);
+        }};
+
+        const nativeWindowOpen = window.open;
+        if (nativeWindowOpen) {{
+            window.open = function(url) {{
+                const args = Array.prototype.slice.call(arguments);
+                if (typeof url === "string" || url instanceof URL) {{
+                    args[0] = lppProxifyUrl(String(url));
+                }}
+                return nativeWindowOpen.apply(this, args);
+            }};
+        }}
+
+        const nativeFetch = window.fetch;
+        if (nativeFetch) {{
+            window.fetch = function(input, init) {{
+                if (typeof input === "string") {{
+                    input = lppProxifyUrl(input);
+                }} else if (input instanceof URL) {{
+                    input = lppProxifyUrl(input.href);
+                }}
+                return nativeFetch.call(this, input, init);
+            }};
+        }}
+
+        const nativeXhrOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {{
             const args = Array.prototype.slice.call(arguments);
-            if (typeof url === "string" || url instanceof URL) {{
-                args[0] = lppProxifyUrl(String(url));
+            if (typeof url === "string") {{
+                args[1] = lppProxifyUrl(url);
+            }} else if (url instanceof URL) {{
+                args[1] = lppProxifyUrl(url.href);
             }}
-            return nativeWindowOpen.apply(this, args);
+            return nativeXhrOpen.apply(this, args);
         }};
+
     }}
 
-    const nativeFetch = window.fetch;
-    if (nativeFetch) {{
-        window.fetch = function(input, init) {{
-            if (typeof input === "string") {{
-                input = lppProxifyUrl(input);
-            }} else if (input instanceof URL) {{
-                input = lppProxifyUrl(input.href);
-            }}
-            return nativeFetch.call(this, input, init);
-        }};
-    }}
-
-    const nativeXhrOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {{
-        const args = Array.prototype.slice.call(arguments);
-        if (typeof url === "string") {{
-            args[1] = lppProxifyUrl(url);
-        }} else if (url instanceof URL) {{
-            args[1] = lppProxifyUrl(url.href);
-        }}
-        return nativeXhrOpen.apply(this, args);
-    }};
+    lppRuntime.install();
 }})();
 </script>"""
 
