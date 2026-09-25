@@ -65,8 +65,29 @@ def get_session(session_id=None):
 
 
 class LPPUrlContract:
-    @staticmethod
-    def resolve(value, base_url):
+    CONTROL_PARAMS = {"lpp_origin"}
+
+    @classmethod
+    def to_logical(cls, value):
+        value = value.strip()
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return value
+
+        pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        logical_pairs = [
+            (name, item)
+            for name, item in pairs
+            if name not in cls.CONTROL_PARAMS
+        ]
+        if len(logical_pairs) == len(pairs):
+            return value
+
+        query = urlencode(logical_pairs, doseq=True)
+        return parsed._replace(query=query).geturl()
+
+    @classmethod
+    def resolve(cls, value, base_url):
         value = value.strip()
         if (
             not value
@@ -76,6 +97,7 @@ class LPPUrlContract:
             return value
 
         absolute = urljoin(base_url, value)
+        absolute = cls.to_logical(absolute)
         parsed = urlparse(absolute)
         if parsed.scheme not in ("http", "https"):
             return value
@@ -224,8 +246,20 @@ def lpp_runtime_script(current_url):
             return value;
         }},
 
+        stripControlParams: function(value) {{
+            if (typeof value !== "string") return value;
+
+            try {{
+                const logical = new URL(value);
+                logical.searchParams.delete("lpp_origin");
+                return logical.href;
+            }} catch (_) {{
+                return value;
+            }}
+        }},
+
         resolve: function(value) {{
-            const logical = this.toLogical(value);
+            const logical = this.stripControlParams(this.toLogical(value));
             if (typeof logical !== "string") return logical;
 
             const trimmed = logical.trim();
@@ -459,6 +493,8 @@ class LPPRequest:
         if include_form_query and logical_url and forwarded_query:
             separator = "&" if urlparse(logical_url).query else "?"
             logical_url += separator + urlencode(forwarded_query, doseq=True)
+
+        logical_url = LPP_URL.to_logical(logical_url) if logical_url else logical_url
 
         return cls(
             method=method,
