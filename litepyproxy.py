@@ -240,6 +240,42 @@ def lpp_runtime_script(current_url):
         // Some browsers expose Location methods as non-writable.
     }}
 
+    function lppExposeLogicalScriptIdentity(script) {{
+        if (!script) return script;
+
+        const src = script.getAttribute("src");
+        if (!src) return script;
+
+        const logicalSrc = lppIdentity.logicalUrl(script.src);
+        if (logicalSrc === script.src) return script;
+
+        return new Proxy(script, {{
+            get: function(target, property, receiver) {{
+                if (property === "src") return logicalSrc;
+                return Reflect.get(target, property, receiver);
+            }}
+        }});
+    }}
+
+    try {{
+        const currentScriptDescriptor = Object.getOwnPropertyDescriptor(
+            Document.prototype,
+            "currentScript"
+        );
+        if (currentScriptDescriptor && currentScriptDescriptor.get) {{
+            Object.defineProperty(document, "currentScript", {{
+                configurable: true,
+                get: function() {{
+                    return lppExposeLogicalScriptIdentity(
+                        currentScriptDescriptor.get.call(document)
+                    );
+                }}
+            }});
+        }}
+    }} catch (_) {{
+        // Keep native currentScript semantics if the browser forbids wrapping it.
+    }}
+
     const nativeWindowOpen = window.open;
     if (nativeWindowOpen) {{
         window.open = function(url) {{
