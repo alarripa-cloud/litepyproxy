@@ -167,15 +167,16 @@ def lpp_runtime_script(current_url):
     const LPP_PROXY_ENDPOINT = {json.dumps(PROXY_ENDPOINT)};
     const LPP_BASE_URL = {json.dumps(current_url)};
 
-    const lppIdentity = Object.freeze({{
-        url: LPP_BASE_URL,
-        origin: new URL(LPP_BASE_URL).origin,
+    const lppUrl = Object.freeze({{
+        logicalBase: LPP_BASE_URL,
+        logicalOrigin: new URL(LPP_BASE_URL).origin,
 
-        logicalUrl: function(value) {{
+        toLogical: function(value) {{
             if (typeof value !== "string") return value;
 
             try {{
                 const physical = new URL(value, window.location.href);
+
                 if (physical.origin === window.location.origin) {{
                     if (physical.pathname === LPP_PROXY_ENDPOINT) {{
                         const logical = physical.searchParams.get("url");
@@ -189,42 +190,66 @@ def lpp_runtime_script(current_url):
                         );
                         return new URL(
                             logicalPath + physical.search + physical.hash,
-                            lppIdentity.origin
+                            this.logicalOrigin
                         ).href;
                     }}
+
+                    return new URL(
+                        physical.pathname + physical.search + physical.hash,
+                        this.logicalOrigin
+                    ).href;
                 }}
             }} catch (_) {{
-                // Not a URL LPP can translate.
+                // Leave values outside the URL contract unchanged.
             }}
 
             return value;
+        }},
+
+        resolve: function(value) {{
+            const logical = this.toLogical(value);
+            if (typeof logical !== "string") return logical;
+
+            const trimmed = logical.trim();
+            if (
+                !trimmed ||
+                trimmed.startsWith("#") ||
+                /^(?:data|javascript|mailto|tel):/i.test(trimmed)
+            ) {{
+                return logical;
+            }}
+
+            try {{
+                const absolute = new URL(trimmed, this.logicalBase);
+                if (absolute.protocol !== "http:" && absolute.protocol !== "https:") {{
+                    return logical;
+                }}
+                return absolute.href;
+            }} catch (_) {{
+                return logical;
+            }}
+        }},
+
+        toPhysical: function(value) {{
+            const logical = this.resolve(value);
+            if (typeof logical !== "string") return logical;
+
+            try {{
+                const absolute = new URL(logical);
+                if (absolute.protocol !== "http:" && absolute.protocol !== "https:") {{
+                    return logical;
+                }}
+                return LPP_PROXY_ENDPOINT
+                    + "?url=" + encodeURIComponent(absolute.href)
+                    + "&lpp_origin=" + encodeURIComponent(this.logicalOrigin);
+            }} catch (_) {{
+                return logical;
+            }}
         }}
     }});
 
     function lppProxifyUrl(value) {{
-        if (typeof value !== "string") return value;
-
-        const logicalValue = lppIdentity.logicalUrl(value);
-        const trimmed = logicalValue.trim();
-        if (
-            !trimmed ||
-            trimmed.startsWith("#") ||
-            /^(?:data|javascript|mailto|tel):/i.test(trimmed)
-        ) {{
-            return logicalValue;
-        }}
-
-        try {{
-            const absolute = new URL(trimmed, lppIdentity.url);
-            if (absolute.protocol !== "http:" && absolute.protocol !== "https:") {{
-                return logicalValue;
-            }}
-            return LPP_PROXY_ENDPOINT
-                + "?url=" + encodeURIComponent(absolute.href)
-                + "&lpp_origin=" + encodeURIComponent(lppIdentity.origin);
-        }} catch (_) {{
-            return logicalValue;
-        }}
+        return lppUrl.toPhysical(value);
     }}
 
     function lppNavigate(value, replace) {{
@@ -256,7 +281,7 @@ def lpp_runtime_script(current_url):
         const src = script.getAttribute("src");
         if (!src) return script;
 
-        const logicalSrc = lppIdentity.logicalUrl(script.src);
+        const logicalSrc = lppUrl.toLogical(script.src);
         if (logicalSrc === script.src) return script;
 
         return new Proxy(script, {{
