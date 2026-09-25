@@ -3,6 +3,7 @@
 import html
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -23,7 +24,10 @@ if BASE_PATH:
     BASE_PATH = "/" + BASE_PATH.strip("/")
 
 PROXY_ENDPOINT = f"{BASE_PATH}/proxy"
-REWRITE_ATTRS = {"href", "src", "action"}
+REWRITE_ATTRS = {
+    "href", "src", "action", "poster", "background", "cite", "longdesc",
+    "usemap", "formaction", "manifest",
+}
 SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:")
 REQUEST_HEADER_BLOCKLIST = {
     "host",
@@ -168,11 +172,45 @@ class HTMLRewriter(HTMLParser):
         self.current_url = current_url
         self.parts = []
 
-    def rewrite_attrs(self, attrs):
+    def rewrite_srcset(self, value):
+        candidates = []
+        for candidate in value.split(","):
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            pieces = candidate.split()
+            pieces[0] = LPP_URL.to_physical(pieces[0], self.current_url)
+            candidates.append(" ".join(pieces))
+        return ", ".join(candidates)
+
+    def rewrite_meta_refresh(self, value):
+        match = re.match(r"^(\\s*\\d+(?:\\.\\d+)?\\s*;\\s*url\\s*=\\s*)(.*)$", value, re.I)
+        if not match:
+            return value
+        target = match.group(2).strip()
+        quote_char = ""
+        if len(target) >= 2 and target[0] in ("\\'", '"') and target[-1] == target[0]:
+            quote_char = target[0]
+            target = target[1:-1]
+        target = LPP_URL.to_physical(target, self.current_url)
+        return match.group(1) + quote_char + target + quote_char
+
+    def rewrite_attrs(self, tag, attrs):
         rewritten = []
+        is_refresh = False
+        if tag.lower() == "meta":
+            attr_map = {name.lower(): value for name, value in attrs}
+            is_refresh = (attr_map.get("http-equiv") or "").lower() == "refresh"
+
         for name, value in attrs:
-            if value is not None and name.lower() in REWRITE_ATTRS:
-                value = LPP_URL.to_physical(value, self.current_url)
+            lname = name.lower()
+            if value is not None:
+                if lname in REWRITE_ATTRS:
+                    value = LPP_URL.to_physical(value, self.current_url)
+                elif lname == "srcset":
+                    value = self.rewrite_srcset(value)
+                elif is_refresh and lname == "content":
+                    value = self.rewrite_meta_refresh(value)
             rewritten.append((name, value))
         return rewritten
 
@@ -207,7 +245,7 @@ class HTMLRewriter(HTMLParser):
             )
             return
 
-        self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(attrs))}>")
+        self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(tag, attrs))}>")
 
     def handle_startendtag(self, tag, attrs):
         self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(attrs))} />")
