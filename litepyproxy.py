@@ -37,7 +37,7 @@ SESSIONS_LOCK = threading.Lock()
 
 def new_http_client():
     return httpx.Client(
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=TIMEOUT,
         limits=httpx.Limits(
             max_connections=MAX_CONNECTIONS,
@@ -250,6 +250,12 @@ class LPPResponse:
 
     def header(self, name, default=None):
         return self.headers.get(name, default)
+
+    def proxified_location(self):
+        location = self.header("location")
+        if not location:
+            return None
+        return lpp_proxify_url(location, self.url)
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
@@ -531,6 +537,9 @@ html {{
 
         self.send_response(response.status_code)
         self.send_header("Content-Type", content_type)
+        location = response.proxified_location()
+        if location:
+            self.send_header("Location", location)
         if content_length is not None:
             self.send_header("Content-Length", content_length)
         if new_session:
