@@ -580,6 +580,35 @@ def lpp_runtime_script(current_url):
 </script>"""
 
 
+class JavaScriptRewriter:
+    NAVIGATION_PATTERNS = (
+        (
+            re.compile(r"(?<![\\w$.])(?:window\\s*\\.\\s*)?location\\s*\\.\\s*(?:assign|replace)\\s*\\(([^)]*)\\)"),
+            lambda match: "lppNavigate(" + match.group(1) + ", "
+            + ("true" if re.search(r"\\.\\s*replace\\s*\\(", match.group(0)) else "false")
+            + ")",
+        ),
+        (
+            re.compile(r"(?<![\\w$.])(?:window\\s*\\.\\s*)?(?:document\\s*\\.\\s*)?location\\s*\\.\\s*href\\s*=\\s*([^;\\n]+)"),
+            lambda match: "lppNavigate(" + match.group(1).rstrip() + ", false)",
+        ),
+        (
+            re.compile(r"(?<![\\w$.])(?:window\\s*\\.\\s*)?location\\s*=\\s*([^;\\n]+)"),
+            lambda match: "lppNavigate(" + match.group(1).rstrip() + ", false)",
+        ),
+        (
+            re.compile(r"(?<![\\w$.])document\\s*\\.\\s*location\\s*=\\s*([^;\\n]+)"),
+            lambda match: "lppNavigate(" + match.group(1).rstrip() + ", false)",
+        ),
+    )
+
+    @classmethod
+    def rewrite(cls, source):
+        for pattern, replacement in cls.NAVIGATION_PATTERNS:
+            source = pattern.sub(replacement, source)
+        return source
+
+
 class LPPTransformer:
     @classmethod
     def transform_html(cls, response):
@@ -590,9 +619,20 @@ class LPPTransformer:
         return rewriter.output()
 
     @classmethod
+    def transform_javascript(cls, response):
+        return JavaScriptRewriter.rewrite(response.text)
+
+    @classmethod
     def transform(cls, response, content_type):
-        if "text/html" in content_type.lower():
+        lowered = content_type.lower()
+        if "text/html" in lowered:
             return cls.transform_html(response)
+        if (
+            "javascript" in lowered
+            or "application/ecmascript" in lowered
+            or "text/ecmascript" in lowered
+        ):
+            return cls.transform_javascript(response)
         return None
 
 
@@ -942,8 +982,13 @@ html {{
             content_type = "text/html; charset=utf-8"
             content_length = str(len(body))
         else:
-            body = response.content
-            content_length = str(len(body))
+            transformed = LPPTransformer.transform(response, content_type)
+            if transformed is not None:
+                body = transformed.encode("utf-8")
+                content_length = str(len(body))
+            else:
+                body = response.content
+                content_length = str(len(body))
 
         self.send_response(response.status_code)
         self.send_header("Content-Type", content_type)
