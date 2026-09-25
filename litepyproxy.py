@@ -176,12 +176,22 @@ def lpp_runtime_script(current_url):
 
             try {{
                 const physical = new URL(value, window.location.href);
-                if (
-                    physical.origin === window.location.origin &&
-                    physical.pathname === LPP_PROXY_ENDPOINT
-                ) {{
-                    const logical = physical.searchParams.get("url");
-                    if (logical) return logical;
+                if (physical.origin === window.location.origin) {{
+                    if (physical.pathname === LPP_PROXY_ENDPOINT) {{
+                        const logical = physical.searchParams.get("url");
+                        if (logical) return logical;
+                    }}
+
+                    const leakedPrefix = LPP_PROXY_ENDPOINT + "/";
+                    if (physical.pathname.startsWith(leakedPrefix)) {{
+                        const logicalPath = physical.pathname.slice(
+                            LPP_PROXY_ENDPOINT.length
+                        );
+                        return new URL(
+                            logicalPath + physical.search + physical.hash,
+                            lppIdentity.origin
+                        ).href;
+                    }}
                 }}
             }} catch (_) {{
                 // Not a URL LPP can translate.
