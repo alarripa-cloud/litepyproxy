@@ -239,6 +239,19 @@ class LPPRequest:
         self.head_only = head_only
 
 
+class LPPResponse:
+    def __init__(self, upstream):
+        self.upstream = upstream
+        self.status_code = upstream.status_code
+        self.headers = upstream.headers
+        self.url = str(upstream.url)
+        self.content = upstream.content
+        self.text = upstream.text
+
+    def header(self, name, default=None):
+        return self.headers.get(name, default)
+
+
 class LitePyProxyHandler(BaseHTTPRequestHandler):
     def get_upstream_headers(self, logical_origin=None):
         headers = {}
@@ -424,15 +437,17 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             self.send_error(502, f"Upstream request failed: {exc}")
             return
 
-        content_type = response.headers.get(
+        response = LPPResponse(response)
+
+        content_type = response.header(
             "content-type", "application/octet-stream"
         )
 
         if head_only:
             body = b""
-            content_length = response.headers.get("content-length")
+            content_length = response.header("content-length")
         elif "text/html" in content_type.lower():
-            current_url = str(response.url)
+            current_url = response.url
             rewriter = HTMLRewriter(current_url)
             rewriter.feed(response.text)
             rewriter.close()
