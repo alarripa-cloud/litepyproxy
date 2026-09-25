@@ -9,7 +9,7 @@ import time
 from html.parser import HTMLParser
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 
 import httpx
 
@@ -429,6 +429,47 @@ class LPPRequest:
         self.content_type = content_type
         self.head_only = head_only
 
+    @classmethod
+    def from_browser(
+        cls,
+        method,
+        physical_url,
+        body=None,
+        content_type=None,
+        head_only=False,
+        include_form_query=False,
+    ):
+        physical = urlparse(physical_url)
+        if physical.path != "/proxy":
+            return None
+
+        pairs = parse_qsl(physical.query, keep_blank_values=True)
+        logical_url = ""
+        logical_origin = None
+        forwarded_query = []
+
+        for name, value in pairs:
+            if name == "url" and not logical_url:
+                logical_url = value.strip()
+            elif name == "lpp_origin" and logical_origin is None:
+                logical_origin = value.strip()
+            else:
+                forwarded_query.append((name, value))
+
+        if include_form_query and logical_url and forwarded_query:
+            separator = "&" if urlparse(logical_url).query else "?"
+            logical_url += separator + urlencode(forwarded_query, doseq=True)
+
+        return cls(
+            method=method,
+            physical_url=physical_url,
+            logical_url=logical_url,
+            logical_origin=logical_origin,
+            body=body,
+            content_type=content_type,
+            head_only=head_only,
+        )
+
 
 class LPPResponse:
     def __init__(self, upstream):
@@ -485,53 +526,19 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         return get_session(session_id)
 
-    def get_target(self, include_form_query=False):
-        request = urlparse(self.path)
-        if request.path != "/proxy":
-            return None
-
-        pairs = parse_qsl(request.query, keep_blank_values=True)
-        target = ""
-        logical_origin = None
-        form_pairs = []
-
-        for name, value in pairs:
-            if name == "url" and not target:
-                target = value.strip()
-            elif name == "lpp_origin" and logical_origin is None:
-                logical_origin = value.strip()
-            else:
-                form_pairs.append((name, value))
-
-        if include_form_query and target and form_pairs:
-            separator = "&" if urlparse(target).query else "?"
-            target += separator + urlencode(form_pairs, doseq=True)
-
-        return target, logical_origin
-
     def do_GET(self):
-        result = self.get_target(include_form_query=True)
-        if result is not None:
-            target, logical_origin = result
-            request = LPPRequest(
-                method="GET",
-                physical_url=self.path,
-                logical_url=target,
-                logical_origin=logical_origin,
-            )
+        request = LPPRequest.from_browser(
+            method="GET",
+            physical_url=self.path,
+            include_form_query=True,
+        )
+        if request is not None:
             self.proxy(request)
             return
 
         self.home()
 
     def do_POST(self):
-        result = self.get_target()
-        if result is None:
-            self.send_error(404)
-            return
-
-        target, logical_origin = result
-
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -539,27 +546,25 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             return
 
         body = self.rfile.read(content_length)
-        request = LPPRequest(
+        request = LPPRequest.from_browser(
             method="POST",
             physical_url=self.path,
-            logical_url=target,
-            logical_origin=logical_origin,
             body=body,
             content_type=self.headers.get("Content-Type"),
         )
+        if request is None:
+            self.send_error(404)
+            return
+
         self.proxy(request)
 
     def do_HEAD(self):
-        result = self.get_target()
-        if result is not None:
-            target, logical_origin = result
-            request = LPPRequest(
-                method="HEAD",
-                physical_url=self.path,
-                logical_url=target,
-                logical_origin=logical_origin,
-                head_only=True,
-            )
+        request = LPPRequest.from_browser(
+            method="HEAD",
+            physical_url=self.path,
+            head_only=True,
+        )
+        if request is not None:
             self.proxy(request)
             return
 
