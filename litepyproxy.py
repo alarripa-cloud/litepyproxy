@@ -167,29 +167,53 @@ def lpp_runtime_script(current_url):
     const LPP_PROXY_ENDPOINT = {json.dumps(PROXY_ENDPOINT)};
     const LPP_BASE_URL = {json.dumps(current_url)};
 
+    const lppIdentity = Object.freeze({{
+        url: LPP_BASE_URL,
+        origin: new URL(LPP_BASE_URL).origin,
+
+        logicalUrl: function(value) {{
+            if (typeof value !== "string") return value;
+
+            try {{
+                const physical = new URL(value, window.location.href);
+                if (
+                    physical.origin === window.location.origin &&
+                    physical.pathname === LPP_PROXY_ENDPOINT
+                ) {{
+                    const logical = physical.searchParams.get("url");
+                    if (logical) return logical;
+                }}
+            }} catch (_) {{
+                // Not a URL LPP can translate.
+            }}
+
+            return value;
+        }}
+    }});
+
     function lppProxifyUrl(value) {{
         if (typeof value !== "string") return value;
 
-        const trimmed = value.trim();
+        const logicalValue = lppIdentity.logicalUrl(value);
+        const trimmed = logicalValue.trim();
         if (
             !trimmed ||
             trimmed.startsWith("#") ||
             /^(?:data|javascript|mailto|tel):/i.test(trimmed)
         ) {{
-            return value;
+            return logicalValue;
         }}
 
         try {{
-            const absolute = new URL(trimmed, LPP_BASE_URL);
+            const absolute = new URL(trimmed, lppIdentity.url);
             if (absolute.protocol !== "http:" && absolute.protocol !== "https:") {{
-                return value;
+                return logicalValue;
             }}
-            const logicalOrigin = new URL(LPP_BASE_URL).origin;
             return LPP_PROXY_ENDPOINT
                 + "?url=" + encodeURIComponent(absolute.href)
-                + "&lpp_origin=" + encodeURIComponent(logicalOrigin);
+                + "&lpp_origin=" + encodeURIComponent(lppIdentity.origin);
         }} catch (_) {{
-            return value;
+            return logicalValue;
         }}
     }}
 
