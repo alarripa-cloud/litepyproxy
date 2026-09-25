@@ -784,6 +784,10 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             self.home("No URL supplied.", head_only=head_only)
             return
 
+        if "://" not in target:
+            target = normalize_user_url(target)
+            request.logical_url = target
+
         parsed = urlparse(target)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             self.home(
