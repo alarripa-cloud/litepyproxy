@@ -151,6 +151,17 @@ class LPPUrlContract:
 LPP_URL = LPPUrlContract()
 
 
+def normalize_user_url(value):
+    value = value.strip()
+    if not value:
+        return value
+    if value.lower().startswith("https://"):
+        return value
+    if value.lower().startswith("http://"):
+        return "https://" + value[7:]
+    return "https://" + value
+
+
 class HTMLRewriter(HTMLParser):
     def __init__(self, current_url):
         super().__init__(convert_charrefs=False)
@@ -531,6 +542,22 @@ def lpp_runtime_script(current_url):
 </script>"""
 
 
+class LPPTransformer:
+    @classmethod
+    def transform_html(cls, response):
+        current_url = response.url
+        rewriter = HTMLRewriter(current_url)
+        rewriter.feed(response.text)
+        rewriter.close()
+        return rewriter.output()
+
+    @classmethod
+    def transform(cls, response, content_type):
+        if "text/html" in content_type.lower():
+            return cls.transform_html(response)
+        return None
+
+
 class LPPRequest:
     def __init__(
         self,
@@ -590,6 +617,8 @@ class LPPRequest:
 
         browser_headers = browser_headers or {}
         referer = browser_headers.get("Referer")
+        if method == "GET" and logical_url and not referer:
+            logical_url = normalize_user_url(logical_url)
         logical_referer = LPP_URL.from_physical(referer) if referer else None
 
         semantic_headers = {}
@@ -729,8 +758,8 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
     <h1>LitePyProxy</h1>
     <form action="{html.escape(PROXY_ENDPOINT, quote=True)}" method="get">
         <label for="url">URL:</label>
-        <input id="url" name="url" type="url" size="70"
-               placeholder="https://example.com" required>
+        <input id="url" name="url" type="text" size="70"
+               placeholder="example.com" required>
         <button type="submit">GO</button>
     </form>
     {error_html}
@@ -794,10 +823,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             content_length = response.header("content-length")
         elif "text/html" in content_type.lower():
             current_url = response.url
-            rewriter = HTMLRewriter(current_url)
-            rewriter.feed(response.text)
-            rewriter.close()
-            page = rewriter.output()
+            page = LPPTransformer.transform(response, content_type)
 
             toolbar = f"""<style>
 #litepyproxy-bar {{
