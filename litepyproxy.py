@@ -617,8 +617,6 @@ class LPPRequest:
 
         browser_headers = browser_headers or {}
         referer = browser_headers.get("Referer")
-        if method == "GET" and logical_url and not referer:
-            logical_url = normalize_user_url(logical_url)
         logical_referer = LPP_URL.from_physical(referer) if referer else None
 
         semantic_headers = {}
@@ -704,6 +702,10 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             browser_headers=self.headers,
         )
         if request is not None:
+            physical = urlparse(self.path)
+            query_names = [name for name, _ in parse_qsl(physical.query, keep_blank_values=True)]
+            if query_names == ["url"]:
+                request.logical_url = normalize_user_url(request.logical_url)
             self.proxy(request)
             return
 
