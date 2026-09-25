@@ -25,7 +25,22 @@ if BASE_PATH:
 PROXY_ENDPOINT = f"{BASE_PATH}/proxy"
 REWRITE_ATTRS = {"href", "src", "action"}
 SKIP_SCHEMES = ("data:", "javascript:", "mailto:", "tel:")
-FORWARDED_HEADERS = ("User-Agent", "Accept", "Accept-Language")
+REQUEST_HEADER_BLOCKLIST = {
+    "host",
+    "connection",
+    "content-length",
+    "cookie",
+    "authorization",
+    "proxy-authorization",
+    "origin",
+    "referer",
+    "content-type",
+    "accept-encoding",
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+}
 
 UPSTREAM_SLOTS = threading.BoundedSemaphore(MAX_CONNECTIONS)
 
@@ -112,6 +127,21 @@ class LPPUrlContract:
             return logical_url
 
         return f"{PROXY_ENDPOINT}?url={quote(logical_url, safe='')}"
+
+    @classmethod
+    def from_physical(cls, value):
+        value = value.strip()
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return value
+        if parsed.path != PROXY_ENDPOINT:
+            return value
+
+        for name, item in parse_qsl(parsed.query, keep_blank_values=True):
+            if name == "url":
+                return cls.to_logical(item.strip())
+
+        return value
 
     @classmethod
     def form_target(cls, value, base_url):
@@ -451,6 +481,8 @@ class LPPRequest:
         physical_url,
         logical_url,
         logical_origin=None,
+        logical_referer=None,
+        headers=None,
         body=None,
         content_type=None,
         head_only=False,
@@ -459,6 +491,8 @@ class LPPRequest:
         self.physical_url = physical_url
         self.logical_url = logical_url
         self.logical_origin = logical_origin
+        self.logical_referer = logical_referer
+        self.headers = headers or {}
         self.body = body
         self.content_type = content_type
         self.head_only = head_only
@@ -472,6 +506,7 @@ class LPPRequest:
         content_type=None,
         head_only=False,
         include_form_query=False,
+        browser_headers=None,
     ):
         physical = urlparse(physical_url)
         if physical.path != "/proxy":
@@ -496,11 +531,22 @@ class LPPRequest:
 
         logical_url = LPP_URL.to_logical(logical_url) if logical_url else logical_url
 
+        browser_headers = browser_headers or {}
+        referer = browser_headers.get("Referer")
+        logical_referer = LPP_URL.from_physical(referer) if referer else None
+
+        semantic_headers = {}
+        for name, value in browser_headers.items():
+            if name.lower() not in REQUEST_HEADER_BLOCKLIST:
+                semantic_headers[name] = value
+
         return cls(
             method=method,
             physical_url=physical_url,
             logical_url=logical_url,
             logical_origin=logical_origin,
+            logical_referer=logical_referer,
+            headers=semantic_headers,
             body=body,
             content_type=content_type,
             head_only=head_only,
@@ -527,14 +573,11 @@ class LPPResponse:
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
-    def get_upstream_headers(self, logical_origin=None):
-        headers = {}
-        for name in FORWARDED_HEADERS:
-            value = self.headers.get(name)
-            if value:
-                headers[name] = value
-        if logical_origin:
-            parsed_origin = urlparse(logical_origin)
+    def get_upstream_headers(self, request):
+        headers = dict(request.headers)
+
+        if request.logical_origin:
+            parsed_origin = urlparse(request.logical_origin)
             if (
                 parsed_origin.scheme in ("http", "https")
                 and parsed_origin.netloc
@@ -546,6 +589,11 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
                 headers["Origin"] = (
                     f"{parsed_origin.scheme}://{parsed_origin.netloc}"
                 )
+
+        if request.logical_referer:
+            parsed_referer = urlparse(request.logical_referer)
+            if parsed_referer.scheme in ("http", "https") and parsed_referer.netloc:
+                headers["Referer"] = request.logical_referer
 
         return headers
 
@@ -567,6 +615,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             method="GET",
             physical_url=self.path,
             include_form_query=True,
+            browser_headers=self.headers,
         )
         if request is not None:
             self.proxy(request)
@@ -587,6 +636,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             physical_url=self.path,
             body=body,
             content_type=self.headers.get("Content-Type"),
+            browser_headers=self.headers,
         )
         if request is None:
             self.send_error(404)
@@ -599,6 +649,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             method="HEAD",
             physical_url=self.path,
             head_only=True,
+            browser_headers=self.headers,
         )
         if request is not None:
             self.proxy(request)
@@ -655,7 +706,7 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         session_id, session, new_session = self.get_proxy_session()
         client = session["client"]
-        upstream_headers = self.get_upstream_headers(request.logical_origin)
+        upstream_headers = self.get_upstream_headers(request)
         if request.content_type:
             upstream_headers["Content-Type"] = request.content_type
 
