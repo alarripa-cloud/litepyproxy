@@ -248,7 +248,7 @@ class HTMLRewriter(HTMLParser):
         self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(tag, attrs))}>")
 
     def handle_startendtag(self, tag, attrs):
-        self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(attrs))} />")
+        self.parts.append(f"<{tag}{self.attrs_text(self.rewrite_attrs(tag, attrs))} />")
 
     def handle_endtag(self, tag):
         self.parts.append(f"</{tag}>")
