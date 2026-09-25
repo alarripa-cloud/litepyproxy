@@ -337,8 +337,56 @@ def lpp_runtime_script(current_url):
             return this.url.toPhysical(value);
         }}
 
+        installNavigation() {{
+            const runtime = this;
+
+            const nativeWindowOpen = window.open;
+            if (nativeWindowOpen) {{
+                window.open = function(url) {{
+                    const args = Array.prototype.slice.call(arguments);
+                    if (typeof url === "string" || url instanceof URL) {{
+                        args[0] = runtime.toPhysical(String(url));
+                    }}
+                    return nativeWindowOpen.apply(this, args);
+                }};
+            }}
+
+            lppInstallUrlProperty(HTMLAnchorElement.prototype, "href");
+            lppInstallUrlProperty(HTMLFormElement.prototype, "action");
+
+            const nativeAnchorClick = HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click = function() {{
+                const href = this.getAttribute("href");
+                if (href) {{
+                    this.setAttribute("href", runtime.toPhysical(href));
+                }}
+                return nativeAnchorClick.apply(this, arguments);
+            }};
+
+            const nativeFormSubmit = HTMLFormElement.prototype.submit;
+            HTMLFormElement.prototype.submit = function() {{
+                const action = this.getAttribute("action");
+                if (action) {{
+                    this.setAttribute("action", runtime.toPhysical(action));
+                }}
+                return nativeFormSubmit.apply(this, arguments);
+            }};
+
+            if (HTMLFormElement.prototype.requestSubmit) {{
+                const nativeRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+                HTMLFormElement.prototype.requestSubmit = function() {{
+                    const action = this.getAttribute("action");
+                    if (action) {{
+                        this.setAttribute("action", runtime.toPhysical(action));
+                    }}
+                    return nativeRequestSubmit.apply(this, arguments);
+                }};
+            }}
+        }}
+
         install() {{
             installRuntime(this);
+            this.installNavigation();
         }}
     }}
 
@@ -445,24 +493,13 @@ def lpp_runtime_script(current_url):
         Element.prototype.setAttribute = function(name, value) {{
             if (
                 typeof name === "string" &&
-                /^(?:src|href)$/i.test(name) &&
+                /^(?:src|href|action)$/i.test(name) &&
                 (typeof value === "string" || value instanceof URL)
             ) {{
                 value = lppProxifyUrl(String(value));
             }}
             return nativeSetAttribute.call(this, name, value);
         }};
-
-        const nativeWindowOpen = window.open;
-        if (nativeWindowOpen) {{
-            window.open = function(url) {{
-                const args = Array.prototype.slice.call(arguments);
-                if (typeof url === "string" || url instanceof URL) {{
-                    args[0] = lppProxifyUrl(String(url));
-                }}
-                return nativeWindowOpen.apply(this, args);
-            }};
-        }}
 
         const nativeFetch = window.fetch;
         if (nativeFetch) {{
