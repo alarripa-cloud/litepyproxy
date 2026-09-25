@@ -797,16 +797,43 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             return
 
         body = self.rfile.read(content_length)
+        content_type = self.headers.get("Content-Type")
         request = LPPRequest.from_browser(
             method="POST",
             physical_url=self.path,
             body=body,
-            content_type=self.headers.get("Content-Type"),
+            content_type=content_type,
             browser_headers=self.headers,
         )
         if request is None:
             self.send_error(404)
             return
+
+        if (
+            not request.logical_url
+            and content_type
+            and content_type.lower().split(";", 1)[0].strip()
+                == "application/x-www-form-urlencoded"
+        ):
+            try:
+                form_pairs = parse_qsl(
+                    body.decode("utf-8"),
+                    keep_blank_values=True,
+                )
+            except UnicodeDecodeError:
+                form_pairs = []
+
+            target = ""
+            forwarded_pairs = []
+            for name, value in form_pairs:
+                if name == "url" and not target:
+                    target = value.strip()
+                else:
+                    forwarded_pairs.append((name, value))
+
+            if target:
+                request.logical_url = LPP_URL.to_logical(target)
+                request.body = urlencode(forwarded_pairs, doseq=True).encode("utf-8")
 
         self.proxy(request)
 
