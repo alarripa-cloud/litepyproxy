@@ -64,21 +64,39 @@ def get_session(session_id=None):
         return session_id, session, True
 
 
-def lpp_proxify_url(value, base_url):
-    value = value.strip()
-    if (
-        not value
-        or value.startswith("#")
-        or value.lower().startswith(SKIP_SCHEMES)
-    ):
-        return value
+class LPPUrlContract:
+    @staticmethod
+    def resolve(value, base_url):
+        value = value.strip()
+        if (
+            not value
+            or value.startswith("#")
+            or value.lower().startswith(SKIP_SCHEMES)
+        ):
+            return value
 
-    absolute = urljoin(base_url, value)
-    parsed = urlparse(absolute)
-    if parsed.scheme not in ("http", "https"):
-        return value
+        absolute = urljoin(base_url, value)
+        parsed = urlparse(absolute)
+        if parsed.scheme not in ("http", "https"):
+            return value
 
-    return f"{PROXY_ENDPOINT}?url={quote(absolute, safe='')}"
+        return absolute
+
+    @classmethod
+    def to_physical(cls, value, base_url):
+        logical_url = cls.resolve(value, base_url)
+        parsed = urlparse(logical_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return logical_url
+
+        return f"{PROXY_ENDPOINT}?url={quote(logical_url, safe='')}"
+
+    @classmethod
+    def form_target(cls, value, base_url):
+        return cls.resolve(value or base_url, base_url)
+
+
+LPP_URL = LPPUrlContract()
 
 
 class HTMLRewriter(HTMLParser):
@@ -91,7 +109,7 @@ class HTMLRewriter(HTMLParser):
         rewritten = []
         for name, value in attrs:
             if value is not None and name.lower() in REWRITE_ATTRS:
-                value = lpp_proxify_url(value, self.current_url)
+                value = LPP_URL.to_physical(value, self.current_url)
             rewritten.append((name, value))
         return rewritten
 
@@ -108,7 +126,7 @@ class HTMLRewriter(HTMLParser):
         if tag.lower() == "form":
             attr_map = {name.lower(): value for name, value in attrs}
             action = attr_map.get("action") or self.current_url
-            absolute_action = urljoin(self.current_url, action)
+            absolute_action = LPP_URL.form_target(action, self.current_url)
 
             rewritten = []
             for name, value in attrs:
@@ -428,7 +446,7 @@ class LPPResponse:
         location = self.header("location")
         if not location:
             return None
-        return lpp_proxify_url(location, self.url)
+        return LPP_URL.to_physical(location, self.url)
 
 
 class LitePyProxyHandler(BaseHTTPRequestHandler):
