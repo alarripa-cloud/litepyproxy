@@ -193,6 +193,26 @@ def lpp_runtime_script(current_url):
         }}
     }}
 
+    function lppNavigate(value, replace) {
+        const proxied = lppProxifyUrl(value);
+        if (replace) {
+            window.location.replace(proxied);
+        } else {
+            window.location.assign(proxied);
+        }
+    }
+
+    const nativeWindowOpen = window.open;
+    if (nativeWindowOpen) {
+        window.open = function(url) {
+            const args = Array.prototype.slice.call(arguments);
+            if (typeof url === "string" || url instanceof URL) {
+                args[0] = lppProxifyUrl(String(url));
+            }
+            return nativeWindowOpen.apply(this, args);
+        };
+    }
+
     const nativeFetch = window.fetch;
     if (nativeFetch) {{
         window.fetch = function(input, init) {{
