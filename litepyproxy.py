@@ -219,6 +219,26 @@ def lpp_runtime_script(current_url):
 </script>"""
 
 
+class LPPRequest:
+    def __init__(
+        self,
+        method,
+        physical_url,
+        logical_url,
+        logical_origin=None,
+        body=None,
+        content_type=None,
+        head_only=False,
+    ):
+        self.method = method
+        self.physical_url = physical_url
+        self.logical_url = logical_url
+        self.logical_origin = logical_origin
+        self.body = body
+        self.content_type = content_type
+        self.head_only = head_only
+
+
 class LitePyProxyHandler(BaseHTTPRequestHandler):
     def get_upstream_headers(self, logical_origin=None):
         headers = {}
@@ -283,7 +303,13 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         result = self.get_target(include_form_query=True)
         if result is not None:
             target, logical_origin = result
-            self.proxy(target, head_only=False, logical_origin=logical_origin)
+            request = LPPRequest(
+                method="GET",
+                physical_url=self.path,
+                logical_url=target,
+                logical_origin=logical_origin,
+            )
+            self.proxy(request)
             return
 
         self.home()
@@ -303,20 +329,28 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
             return
 
         body = self.rfile.read(content_length)
-        self.proxy(
-            target,
-            head_only=False,
+        request = LPPRequest(
             method="POST",
-            request_body=body,
-            request_content_type=self.headers.get("Content-Type"),
+            physical_url=self.path,
+            logical_url=target,
             logical_origin=logical_origin,
+            body=body,
+            content_type=self.headers.get("Content-Type"),
         )
+        self.proxy(request)
 
     def do_HEAD(self):
         result = self.get_target()
         if result is not None:
             target, logical_origin = result
-            self.proxy(target, head_only=True, logical_origin=logical_origin)
+            request = LPPRequest(
+                method="HEAD",
+                physical_url=self.path,
+                logical_url=target,
+                logical_origin=logical_origin,
+                head_only=True,
+            )
+            self.proxy(request)
             return
 
         self.home(head_only=True)
@@ -352,15 +386,10 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
         if not head_only:
             self.wfile.write(body)
 
-    def proxy(
-        self,
-        target,
-        head_only=False,
-        method="GET",
-        request_body=None,
-        request_content_type=None,
-        logical_origin=None,
-    ):
+    def proxy(self, request):
+        target = request.logical_url
+        head_only = request.head_only
+
         if not target:
             self.home("No URL supplied.", head_only=head_only)
             return
@@ -375,18 +404,18 @@ class LitePyProxyHandler(BaseHTTPRequestHandler):
 
         session_id, session, new_session = self.get_proxy_session()
         client = session["client"]
-        upstream_headers = self.get_upstream_headers(logical_origin)
-        if request_content_type:
-            upstream_headers["Content-Type"] = request_content_type
+        upstream_headers = self.get_upstream_headers(request.logical_origin)
+        if request.content_type:
+            upstream_headers["Content-Type"] = request.content_type
 
         try:
             with UPSTREAM_SLOTS:
                 if head_only:
                     response = client.head(target, headers=upstream_headers)
-                elif method == "POST":
+                elif request.method == "POST":
                     response = client.post(
                         target,
-                        content=request_body or b"",
+                        content=request.body or b"",
                         headers=upstream_headers,
                     )
                 else:
