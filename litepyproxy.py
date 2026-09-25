@@ -455,6 +455,20 @@ def lpp_runtime_script(current_url):
         }}
     }}
 
+    Object.defineProperty(window, "__LPP__", {{
+        configurable: false,
+        enumerable: false,
+        writable: false,
+        value: Object.freeze({{
+            navigate: function(value, replace) {{
+                lppNavigate(value, !!replace);
+            }},
+            toPhysical: function(value) {{
+                return lppProxifyUrl(value);
+            }}
+        }})
+    }});
+
     function installRuntime(runtime) {{
         const nativeLocationAssign = window.location.assign.bind(window.location);
         const nativeLocationReplace = window.location.replace.bind(window.location);
@@ -584,7 +598,7 @@ class JavaScriptRewriter:
     NAVIGATION_PATTERNS = (
         (
             re.compile(r"(?<![\\w$.])(?:window\\s*\\.\\s*)?location\\s*\\.\\s*(?:assign|replace)\\s*\\(([^)]*)\\)"),
-            lambda match: "lppNavigate(" + match.group(1) + ", "
+            lambda match: "window.__LPP__.navigate(" + match.group(1) + ", "
             + ("true" if re.search(r"\\.\\s*replace\\s*\\(", match.group(0)) else "false")
             + ")",
         ),
