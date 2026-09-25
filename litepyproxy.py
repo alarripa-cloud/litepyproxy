@@ -276,6 +276,50 @@ def lpp_runtime_script(current_url):
         // Keep native currentScript semantics if the browser forbids wrapping it.
     }}
 
+    function lppInstallUrlProperty(proto, property) {
+        try {
+            const descriptor = Object.getOwnPropertyDescriptor(proto, property);
+            if (!descriptor || !descriptor.set || !descriptor.get) return;
+
+            Object.defineProperty(proto, property, {
+                configurable: descriptor.configurable,
+                enumerable: descriptor.enumerable,
+                get: descriptor.get,
+                set: function(value) {
+                    if (typeof value === "string") {
+                        value = lppProxifyUrl(value);
+                    } else if (value instanceof URL) {
+                        value = lppProxifyUrl(value.href);
+                    }
+                    return descriptor.set.call(this, value);
+                }
+            });
+        } catch (_) {
+            // Keep native DOM behavior when a URL property cannot be wrapped.
+        }
+    }
+
+    [
+        [HTMLIFrameElement.prototype, "src"],
+        [HTMLScriptElement.prototype, "src"],
+        [HTMLImageElement.prototype, "src"],
+        [HTMLLinkElement.prototype, "href"]
+    ].forEach(function(entry) {
+        lppInstallUrlProperty(entry[0], entry[1]);
+    });
+
+    const nativeSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+        if (
+            typeof name === "string" &&
+            /^(?:src|href)$/i.test(name) &&
+            (typeof value === "string" || value instanceof URL)
+        ) {
+            value = lppProxifyUrl(String(value));
+        }
+        return nativeSetAttribute.call(this, name, value);
+    };
+
     const nativeWindowOpen = window.open;
     if (nativeWindowOpen) {{
         window.open = function(url) {{
